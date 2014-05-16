@@ -24,7 +24,7 @@ open(my $fh, "<",  "gandi_api_key")
 my $apikey;
 while (<$fh>) {
     chomp($_);
-    if ($_ !~ m/[0-9A-Za-z]{24}/) {
+    if ($_ !~ m/^[0-9A-Za-z]{24}$/) {
        die "Error: Not a valid Gandi API Key, check for whitespace.\n"
     }
     $apikey = $_;
