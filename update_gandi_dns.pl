@@ -9,7 +9,8 @@ use strict;
 use XML::RPC;
 use Data::Validate::Domain;
 use Getopt::Long;
-use Data::Dumper;
+# only used to help with debugging
+#use Data::Dumper;
 
 sub print_usage() {
     print "\nThis script is used to update a DNS record of a hostname via the Gandi API.
@@ -74,14 +75,61 @@ if ($ip !~ m/([0-9]{1,3}\.){3}[0-9]{1,3}/) {
 }
 
 
-# TODO Setup API
-# LIVE API
-#my $api = XML::RPC->new('https://rpc.gandi.net/xmlrpc/') or die "Error: $!";
-# TESTING API
-#my $api = XML::RPC->new('https://rpc.ote.gandi.net/xmlrpc/') or die "Error: $!";
 
-# Retrieve zoneid given $domain
-#if (!$api->call( 'domain.info', $apikey, $domain)) {
-#    die "API CALL ERROR: $!";
-#} 
-#my $zoneid = $domain_info->{zoneid};
+
+# Setup api object
+my $api = XML::RPC->new('https://rpc.gandi.net/xmlrpc/') or die "Error: $!";
+
+# Query for the domain info
+my $domain_info = $api->call( 'domain.info', $apikey, $domain) or die "Error: $!";
+# Grab the zone id for the domain
+my $domain_zone_id = $domain_info->{zone_id};
+
+# Get more information about the zone
+my $domain_zone_info = $api->call( 'domain.zone.info', $apikey, $domain_zone_id);
+# But we really only need the current version
+my $old_zone_version = $domain_zone_info->{version};
+
+
+# NOTE: We cannot simply update the current zone. Instead we must clone the existing zone, edit
+# that clone and then set it as the live version. This is a design of Gandi in which they force
+# you to use a simplified version control. You will find that this same process must be followed
+# if editing zones via their management panel.
+
+# clone the existing zone so we can work on it
+my $zone_version = $api->call( 'domain.zone.version.new', $apikey, $domain_zone_id);
+
+# Grab the records from the zone
+# returns: arrayref of hashrefs
+my $zone_info = $api->call( 'domain.zone.record.list', $apikey, $domain_zone_id, $zone_version);
+
+# we now need to go through the $zone_info
+my $zone_type;
+my $old_zone_id;
+foreach my $hash_key (@$zone_info) {
+    # we need the record that we want to change
+    if ($hash_key->{'name'} eq $hostname) {
+        # grab the record id
+        $old_zone_id = {
+            'id' => $hash_key->{'id'}
+        };
+        # grab the record type (NS, A, TXT, MX, etc.)
+        $zone_type = $hash_key->{'type'};
+    }
+}
+
+# Setup a structure containing the data for the updated record
+my $new_record_data = {
+    'name' => "$hostname",
+    'type' => "$zone_type",
+    'value' => "$ip"
+};
+
+# update the record
+my $updated_record = $api->call( 'domain.zone.record.update', $apikey, $domain_zone_id, $zone_version, $old_zone_id, $new_record_data) or die "$!";
+
+# set our new cloned zone to be current
+my $domain_zone_version_set = $api->call( 'domain.zone.version.set', $apikey, $domain_zone_id, $zone_version) or die "error: $!";
+
+# delete the old zone version because it is not used anymore
+my $domain_zone_version_delete = $api->call( 'domain.zone.version.delete', $apikey, $domain_zone_id, $old_zone_version) or die "error: $!";
